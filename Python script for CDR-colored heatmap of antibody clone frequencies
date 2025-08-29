@@ -1,0 +1,194 @@
+# -*- coding: utf-8 -*-
+"""
+Created on Sat Jun 14 06:24:36 2025
+@author: EunSeoMichelleChoi
+"""
+"""
+Generates a color-coded heatmap of clone enrichment across NGS input library and screen outputs.
+Highlights mutations across CDR regions using right-aligned mutation segments and color legends.
+Input: CSV file containing clone names, labels, and frequency percentages in with `Mutant`, `Label`, and `% frequency` columns, respectively.
+Output: A `.png` heatmap showing clone abundance and CDR-colored mutation segments.
+CDRs are color-coded as follows:
+  - CDRH1: red
+  - CDRH2: orange
+  - CDRH3: blue
+  - CDRL1: pink
+  - CDRL2: lime
+  - CDRL3: cyan
+"""
+
+import pandas as pd
+import seaborn as sns
+import matplotlib.pyplot as plt
+import matplotlib.colors as mcolors
+import matplotlib.gridspec as gridspec
+import os
+import numpy as np
+import re
+from matplotlib.patches import Patch
+
+# Adjust starting and ending positions of each CDR
+def get_cdr_color(position):
+    cdrs = {
+        'CDRH1': (26, 33, 'red'),
+        'CDRH2': (51, 58, 'orange'),
+        'CDRH3': (97, 108, 'blue'),
+        'CDRL1': (160, 165, 'pink'),
+        'CDRL2': (183, 184, 'lime'),
+        'CDRL3': (222, 232, 'cyan'),
+    }
+    for name, (start, end, color) in cdrs.items():
+        if start <= position <= end:
+            return color
+    return None
+
+def color_mutation(mut_str):
+    segments = mut_str.split()
+    colored = []
+    for segment in segments:
+        match = re.match(r'^([A-Z])(\d+)([A-Z])$', segment)
+        if match:
+            _, pos_str, _ = match.groups()
+            position = int(pos_str)
+            color = get_cdr_color(position)
+            colored.append((segment, color))
+        else:
+            colored.append((segment, None))
+    return colored
+
+def analyze_clone_enrichment(csv_path, LABEL_COL="Label"):
+    # --- read & split label vs numeric ---
+    df_raw = pd.read_csv(csv_path)
+
+    if LABEL_COL not in df_raw.columns:
+        raise ValueError(f"Expected a leftmost label column named '{LABEL_COL}' in the CSV.")
+
+    if "Mutant" not in df_raw.columns:
+        raise ValueError("Expected a 'Mutant' column in the CSV.")
+
+    # preserve label series aligned to Mutant
+    label_series = df_raw[[LABEL_COL, "Mutant"]].set_index("Mutant")[LABEL_COL]
+
+    # numeric table (drop label col, set index to Mutant)
+    df = df_raw.drop(columns=[LABEL_COL]).set_index("Mutant")
+
+    # strip '%' and cast to float
+    df = df.replace('%', '', regex=True).apply(pd.to_numeric, errors='coerce').fillna(0.0)
+
+    output_dir = os.path.dirname(os.path.abspath(csv_path))
+
+    # --- split NGS vs screens ---
+    ngs_col = ['NGS']
+    screen_cols = [c for c in df.columns if c != 'NGS']
+
+    df_ngs = df[ngs_col]
+    df_screens = df[screen_cols] if screen_cols else pd.DataFrame(index=df.index)
+
+    # --- ranges for colorbars ---
+    ngs_min = float(df_ngs.min().min()) if not df_ngs.empty else 0.0
+    ngs_max = float(df_ngs.max().max()) if not df_ngs.empty else 1.0
+    screens_min = float(df_screens.min().min()) if not df_screens.empty else 0.0
+    screens_max = float(df_screens.max().max()) if not df_screens.empty else 1.0
+
+    # --- normalize for colors ---
+    eps = 1e-9
+    ngs_norm = (df_ngs - ngs_min) / (ngs_max - ngs_min + eps) if not df_ngs.empty else df_ngs
+    screens_norm = (df_screens - screens_min) / (screens_max - screens_min + eps) if not df_screens.empty else df_screens
+
+    df_combined = pd.concat([ngs_norm, screens_norm], axis=1)
+    df_combined.rename(columns={'NGS': 'Input Library'}, inplace=True)
+
+    # --- colormaps ---
+    viridis = plt.colormaps.get_cmap('viridis')
+    plasma  = plt.colormaps.get_cmap('plasma')
+    cmap_list = ([viridis] * len(ngs_col)) + ([plasma] * len(screen_cols))
+
+    # --- figure / layout ---
+    num_clones = len(df_combined)
+    fig_height = max(6, num_clones * 0.25)
+    fig = plt.figure(figsize=(16, fig_height))  # wide for readability
+    gs  = gridspec.GridSpec(1, 3, figure=fig, width_ratios=[10, 0.25, 0.25], wspace=0.35)
+    ax  = fig.add_subplot(gs[0])
+
+    # --- color matrix for imshow ---
+    color_matrix = np.empty((len(df_combined), len(df_combined.columns), 4))
+    for i, col in enumerate(df_combined.columns):
+        cmap = cmap_list[i]
+        vals = df_combined[col].to_numpy(dtype=float)
+        color_matrix[:, i, :] = cmap(vals)
+
+    ax.imshow(color_matrix, aspect='auto')
+
+    # --- ticks ---
+    ax.set_yticks(np.arange(len(df_combined)))
+    ax.set_yticklabels([])
+    ax.set_xticks(np.arange(len(df_combined.columns)))
+    ax.set_xticklabels(df_combined.columns, rotation=30, ha='right')
+    ax.set_title("90-minute Screen", fontsize=14)
+
+    # --- labels ---
+    label_series = label_series.reindex(df_combined.index)
+    all_mutant_segments = {m: color_mutation(m) for m in df_combined.index}
+    max_segments = max(len(segments) for segments in all_mutant_segments.values())
+
+    segment_spacing = 0.055
+    label_x = -0.4
+    mutant_x_start = -0.28
+
+    for i, mutant in enumerate(df_combined.index):
+        # Label
+        label_text = str(label_series.loc[mutant]) if pd.notna(label_series.loc[mutant]) else ""
+        ax.text(label_x, i, label_text, fontsize=8, va='center', ha='right',
+                transform=ax.get_yaxis_transform())
+
+        # Mutant segments (right-aligned)
+        segments = all_mutant_segments[mutant]
+        n = len(segments)
+        for j, (segment, color) in enumerate(segments):
+            slot = j + (max_segments - n)
+            x_pos = mutant_x_start + slot * segment_spacing
+            ax.text(x_pos, i, segment,
+                    fontsize=8, va='center', ha='left',
+                    transform=ax.get_yaxis_transform(),
+                    color=color if color else 'black',
+                    fontweight='bold' if color else 'normal')
+
+    # --- y-axis label ---
+    fig.text(0.02, 0.5, 'Clone', va='center', ha='center', rotation='vertical', fontsize=10)
+
+    # --- colorbars ---
+    cax1 = fig.add_subplot(gs[1])
+    norm_ngs = mcolors.Normalize(vmin=ngs_min, vmax=ngs_max)
+    cb1 = plt.colorbar(plt.cm.ScalarMappable(norm=norm_ngs, cmap=viridis), cax=cax1)
+    cb1.set_label('Input Library Frequency (%)', fontsize=10)
+
+    cax2 = fig.add_subplot(gs[2])
+    norm_screen = mcolors.Normalize(vmin=screens_min, vmax=screens_max)
+    cb2 = plt.colorbar(plt.cm.ScalarMappable(norm=norm_screen, cmap=plasma), cax=cax2)
+    cb2.set_label('Screen Frequency (%)', fontsize=10)
+
+    # --- CDR legend ---
+    cdr_legend = {
+        'CDRH1': 'red',
+        'CDRH2': 'orange',
+        'CDRH3': 'blue',
+        'CDRL1': 'pink',
+        'CDRL2': 'lime',
+        'CDRL3': 'cyan',
+    }
+    legend_patches = [Patch(color=color, label=name) for name, color in cdr_legend.items()]
+    legend_ax = fig.add_axes([0.02, 0.75, 0.2, 0.2])
+    legend_ax.axis('off')
+    legend_ax.legend(handles=legend_patches, title='CDR Regions',
+                     loc='upper left', fontsize=8, title_fontsize=9, frameon=False)
+
+    # --- save ---
+    heatmap_path = os.path.join(output_dir, "clone_heatmap_with_colorbars_CDR_rightaligned_with_labels.png")
+    plt.subplots_adjust(left=0.32, right=0.95, top=0.95, bottom=0.1)
+    plt.savefig(heatmap_path, dpi=300)
+    plt.close()
+
+# Run
+analyze_clone_enrichment(
+    r''
+) # add csv file directory
