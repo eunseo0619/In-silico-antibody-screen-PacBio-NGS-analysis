@@ -1,0 +1,131 @@
+# -*- coding: utf-8 -*-
+"""
+Created on Tue Mar 14 17:17:35 2023
+@author: EunSeo_Michelle_Choi
+
+Python script for in silico clonal analysis of antibody libraries.
+This script:
+- Parses a list of NGS-translated protein sequences (from PacBio sequencing, translated in Geneious)
+- Extracts in-frame antibody sequences (based on defined start/end anchors)
+- Matches them against predefined mutant clone lists (e.g., from screens or pooled outputs)
+- Counts their frequencies and exports results to Excel
+"""
+
+import numpy as np
+import pandas as pd
+import re
+import matplotlib.pyplot as plt
+
+# Define canonical 1-letter amino acid codes (with stop codon *)
+residues = np.array(['G','A','V','L','I','P','S','T','N','Q','D','E','K','R','H','Y','F','W','C','M','*'], dtype = "object")
+
+# Wildtype sequence reference <insert reference sequence in ''>
+WT = ''
+
+# Anchors used to extract relevant sequence slice <insert ~6 amino acids in the start and the end in ''>
+start_seq = ''
+end_seq = ''
+
+# Read translated sequences from input CSV
+df = pd.read_csv(r'') # insert csv file path in ''
+seq = df['Sequence'].tolist()
+
+# Read clone sequences (original screen output & pooled screen output)
+# Excel sheet has two sheets, one sheet named 'Originaloutput' for the primary screen, one sheet named 'Pooloutput' for the secondary screen
+orig_df = pd.read_excel(r'', sheet_name = 'Originaloutput') # insert excel file path in ''
+orig_seq = orig_df.Sequence.tolist()
+orig_clone = orig_df.Mutant.tolist()
+
+pool_df = pd.read_excel(r'', sheet_name = 'Pooloutput') # insert excel file path in ''
+pool_seq = pool_df.Sequence.tolist()
+pool_clone = pool_df.Mutant.tolist()
+
+# Function to extract subsequences bounded by anchors
+def slice_seq(seq, start_seq, end_seq):
+    regex = start_seq + '.*?(?=' + end_seq + ')'
+    return re.findall(regex, seq)
+
+# Filter in-frame slices (example length = 243 AA, starting and ending properly)
+inframe = []
+for i in range(len(seq)):
+    sliced = slice_seq(seq[i], start_seq, end_seq)
+    for j in range(len(sliced)):
+        complete_slice_j = sliced[j] + end_seq
+        n_starts = len(re.findall(start_seq, complete_slice_j))
+        n_ends = len(re.findall(end_seq, complete_slice_j))
+
+        # Check start anchor
+        if n_starts == 1 and len(complete_slice_j) == 243:
+            inframe.append(complete_slice_j)
+        elif n_starts != 1:
+            last_slice_j = complete_slice_j.split(start_seq, n_starts)[-1]
+            fixed_slice_j = start_seq + last_slice_j
+            if len(fixed_slice_j) == 243:
+                inframe.append(fixed_slice_j)
+
+        # Check end anchor
+        if n_ends == 1 and len(complete_slice_j) == 243:
+            inframe.append(complete_slice_j)
+        elif n_ends != 1:
+            last_slice_j = complete_slice_j.split(end_seq, n_ends)[-1]
+            fixed_slice_j = end_seq + last_slice_j
+            if len(fixed_slice_j) == 243:
+                inframe.append(fixed_slice_j)
+
+# Print % of in-frame sequences
+percent_inframe = 100 * len(inframe) / len(seq)
+print('% in-frame =', percent_inframe)
+
+# ---------------------------------------------
+# Count each original mutant’s occurrence in input library
+def origout_in_origin():
+    originputcorr = [0] * len(orig_seq)
+    for i in range(len(inframe)):
+        for j in range(len(orig_seq)):
+            if inframe[i] == orig_seq[j]:
+                originputcorr[j] += 1
+            else:
+                originputcorr = 1 * originputcorr
+    return originputcorr
+
+originputcorr = origout_in_origin()
+
+ORIGOUT_IN_ORIGIN_df = pd.DataFrame({
+    'Mutant': orig_clone,
+    'Occurrence in original library input': originputcorr,
+})
+print('SAVE ORIGOUT_IN_ORIGIN_DF AS EXCEL TABLE')
+
+# ---------------------------------------------
+# Count each pooled output clone’s occurrence in input library
+def poolout_in_origin():
+    poolinputcorr = [0] * len(pool_seq)
+    for i in range(len(inframe)):
+        for j in range(len(pool_seq)):
+            if inframe[i] == pool_seq[j]:
+                poolinputcorr[j] += 1
+            else:
+                poolinputcorr = 1 * poolinputcorr
+    return poolinputcorr
+
+poolinputcorr = poolout_in_origin()
+
+POOLOUT_IN_ORIGIN_df = pd.DataFrame({
+    'Mutant': pool_clone,
+    'Occurrence in original library input': poolinputcorr,
+})
+print('SAVE POOLOUT_IN_ORIGIN_DF AS EXCEL TABLE')
+
+# ---------------------------------------------
+# Wildtype (WT) frequency within in-frame sequences
+noWT = []
+for i in range(len(inframe)):
+    if inframe[i] == WT:
+        noWT.append(inframe[i])
+
+percent_WT = 100 * len(noWT) / len(inframe)
+print('%WT =', percent_WT)
+
+# Save results to Excel
+ORIGOUT_IN_ORIGIN_df.to_excel("ORIGOUT_IN_ORIGIN.xlsx", index=False)
+POOLOUT_IN_ORIGIN_df.to_excel("POOLOUT_IN_ORIGIN.xlsx", index=False)
