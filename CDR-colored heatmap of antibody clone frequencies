@@ -3,10 +3,11 @@
 Created on Sat Jun 14 06:24:36 2025
 @author: EunSeo_Michelle_Choi
 
-Generates a color-coded heatmap of clone enrichment across NGS input library and screen outputs.
-Highlights mutations across CDR regions using right-aligned mutation segments and color legends.
-Input: CSV file containing clone names, labels, and frequency percentages in with `Mutant`, `Label`, and `% frequency` columns, respectively.
-Output: A `.png` heatmap showing clone abundance and CDR-colored mutation segments.
+This script:
+- Generates a color-coded heatmap of clone enrichment across NGS input library and screen outputs.
+- Highlights mutations across CDR regions using right-aligned mutation segments and color legends.
+- Input: CSV file containing clone names, labels, and frequency percentages in with `Mutant`, `Label`, and `% frequency` columns, respectively.
+- Output: A `.png` heatmap showing clone abundance and CDR-colored mutation segments.
 CDRs are color-coded as follows:
   - CDRH1: red
   - CDRH2: orange
